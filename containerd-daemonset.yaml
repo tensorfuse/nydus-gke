@@ -23,7 +23,10 @@ spec:
       hostPID: true
       hostIPC: true
       tolerations:
-        - operator: Exists
+        - key: nvidia.com/gpu
+          operator: Equal
+          value: present
+          effect: NoSchedule
       initContainers:
       - name: containerd-config
         image: gcr.io/google.com/cloudsdktool/cloud-sdk:alpine
