@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: containerd-config-updater
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      name: containerd-config-updater
+  template:
+    metadata:
+      labels:
+        name: containerd-config-updater
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: cloud.google.com/gke-accelerator
+                operator: Exists
+      hostNetwork: true
+      hostPID: true
+      hostIPC: true
+      tolerations:
+        - operator: Exists
+      initContainers:
+      - name: containerd-config
+        image: gcr.io/google.com/cloudsdktool/cloud-sdk:alpine
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -ex
+          
+          # Backup original config
+          cp /host/etc/containerd/config.toml /host/etc/containerd/config.toml.backup.$(date +%s) || true
+          
+          # Check if our settings already exist
+          if grep -q "discard_unpacked_layers = false" /host/etc/containerd/config.toml; then
+            echo "Config already applied, skipping..."
+            exit 0
+          fi
+          
+          # Replace discard_unpacked_layers = true with false
+          sed -i 's/discard_unpacked_layers = true/discard_unpacked_layers = false/' /host/etc/containerd/config.toml
+          
+          # Check if disable_snapshot_annotations exists, if not add it
+          if ! grep -q "disable_snapshot_annotations" /host/etc/containerd/config.toml; then
+            # Find the line with discard_unpacked_layers and add the next setting after it
+            sed -i '/discard_unpacked_layers = false/a \  disable_snapshot_annotations = false' /host/etc/containerd/config.toml
+          fi
+          
+          # Restart containerd to apply changes
+          nsenter --target 1 --mount --uts --ipc --net --pid -- systemctl restart containerd
+          
+          echo "Containerd configuration updated successfully"
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: host-etc-containerd
+          mountPath: /host/etc/containerd
+        - name: host-run
+          mountPath: /host/run
+      containers:
+      - name: pause
+        image: gcr.io/google_containers/pause:3.2
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 20m
+            memory: 32Mi
+      volumes:
+      - name: host-etc-containerd
+        hostPath:
+          path: /etc/containerd
+      - name: host-run
+        hostPath:
+          path: /run
